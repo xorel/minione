@@ -40,7 +40,7 @@ DELETE_ONEADMIN='yes'
 EDGE="no"
 EDGE_HOST_NUM=1
 EDGE_MARKETAPP_NAME="Service WordPress -- KVM"
-EDGE_PACKET_FACILITY="ams"
+EDGE_PACKET_FACILITY="ams1"
 EDGE_PACKET_PLAN="t1.small"
 EDGE_PACKET_OS="ubuntu_18_04"
 
@@ -128,6 +128,7 @@ LIBVIRTD='libvirtd'
 ONE_WAIT_TIMEOUT=60
 STAR_NET=''
 ONE_SERVICES='opennebula opennebula-sunstone opennebula-flow opennebula-gate'
+PACKET_TEMPLATE=''
 
 while true ; do
     case "$1" in
@@ -779,7 +780,7 @@ packet_req() {
     local URL="$1"
     shift
 
-    curl -H "X-Auth-Token: $EDGE_PACKET_TOKEN" "$@" https://api.packet.net$URL
+    curl -H "X-Auth-Token: $EDGE_PACKET_TOKEN" "$@" "https://api.packet.net$URL"
 }
 
 
@@ -919,7 +920,7 @@ node && {
 
 packet && {
     HTTP_RESPONSE=$(packet_req "" "-s" "-o" "/dev/null" "-w" "'%{http_code}'")
-    check "[[ $HTTP_RESPONSE = "200" ]]" "Checking auth to Packet" 1
+    check "[[ $HTTP_RESPONSE = \"200\" ]]" "Checking auth to Packet" 1
     # TODO: Verify we have curl
     # TODO: Validate validate project, facility and OS
     # TODO: Validate validate availability of plan (HW type) in facility
@@ -1035,7 +1036,7 @@ conf_change() {
     sed -i -e "s/^${KEY}/${VALUE}/" "${CONF}"  >/dev/null
 }
 
-aug_change() {
+aug_set() {
     local KEY="$1"
     local VALUE="$2"
     if [ -z "$3" ]; then
@@ -1043,7 +1044,7 @@ aug_change() {
     else
         local CONF=$3
     fi
-    augtool -s set "/files$CONF/$KEY" "'$VALUE'"
+    augtool -s set "/files$CONF/$KEY" "'$VALUE'" > /dev/null
 }
 
 switch_to_qemu() {
@@ -1128,11 +1129,14 @@ EOF
 }
 
 update_ssh_configs() {
+
+    local HOSTS=${1:$STAR_NET}
+
     # allow VM addresses to be re-used
     touch /var/lib/one/.ssh/config || return 1
-    grep -q "Host ${STAR_NET}" /var/lib/one/.ssh/config || {
+    grep -q "Host ${HOSTS}" /var/lib/one/.ssh/config || {
         cat >> /var/lib/one/.ssh/config << EOF || return 1
-Host ${STAR_NET}
+Host ${HOSTS}
    StrictHostKeyChecking no
    UserKnownHostsFile=/dev/null
 EOF
@@ -1141,14 +1145,100 @@ EOF
     }
 
     touch ~/.ssh/config || return 1
-    grep -q "Host ${STAR_NET}" ~/.ssh/config || {
+    grep -q "Host ${HOSTS}" ~/.ssh/config || {
         cat >> ~/.ssh/config << EOF || return 1
-Host ${STAR_NET}
+Host ${HOSTS}
    StrictHostKeyChecking no
    UserKnownHostsFile=/dev/null
 EOF
         chmod 0600 ~/.ssh/config
     }
+}
+
+packet_conf_oned() {
+    set -e pipefail
+	aug_set "MONITORING_INTERVAL_HOST" "1000"
+	aug_set "MONITORING_INTERVAL_VM" "300"
+	aug_set "IM_MAD[NAME = '\"kvm\"']/ARGUMENTS" '"-r 3 -t 15 -w 200 kvm"'
+	aug_set "VN_MAD_CONF[last()]/BRIDGE_TYPE" '"linux"'
+	aug_set "IPAM_MAD/ARGUMENTS" '"-t 1 -i dummy,packet"'
+	aug_set "VN_MAD_CONF[last()+1]/NAME" '"alias_sdnat"'
+	aug_set "VN_MAD_CONF[last()]/BRIDGE_TYPE" '"linux"'
+    set +e
+}
+
+packet_conf_hooks() {
+	aug_set "VM_HOOK[last()+1]/name" '"external_ip_running"'
+	aug_set "VM_HOOK[last()]/on" '"RUNNING"'
+	aug_set "VM_HOOK[last()]/command" '"alias_ip/alias_ip.rb"'
+	aug_set "VM_HOOK[last()]/arguments" '"$ID $TEMPLATE"'
+
+	aug_set "VM_HOOK[last()+1]/name" '"alias_ip_hotplug"'
+	aug_set "VM_HOOK[last()]/on" '"CUSTOM"'
+	aug_set "VM_HOOK[last()]/state" '"ACTIVE"'
+	aug_set "VM_HOOK[last()]/lcm_state" '"HOTPLUG_NIC"'
+	aug_set "VM_HOOK[last()]/command" '"alias_ip/alias_ip.rb"'
+	aug_set "VM_HOOK[last()]/arguments" '"$ID $TEMPLATE"'
+	aug_set "VM_HOOK[last()+1]/name" '"alias_ip_done"'
+	aug_set "VM_HOOK[last()]/on" '"DONE"'
+	aug_set "VM_HOOK[last()]/command" '"alias_ip/alias_ip.rb"'
+	aug_set "VM_HOOK[last()]/arguments" '"$ID $TEMPLATE"'
+}
+
+packet_template() {
+    PACKET_TEMPLATE=$(mktemp) || return 1
+    cat >> "$PACKET_TEMPLATE" << EOF || return 1
+---
+name: PacketProvision
+extends: /usr/share/one/oneprovision/templates/static_vxlan.yaml
+defaults:
+  provision:
+    driver: packet
+    packet_project: $EDGE_PACKET_PROJECT
+    packet_token: $EDGE_PACKET_TOKEN
+    facility: $EDGE_PACKET_FACILITY
+    plan: $EDGE_PACKET_PLAN
+    os: $EDGE_PACKET_OS
+  connection:
+    remote_user: root
+  configuration:
+    opennebula_node_kvm_use_ev: true
+
+cluster:
+  name: PacketCluster
+
+datastores:
+  - name: packet-default
+    ds_mad: fs
+    tm_mad: ssh
+  - name: packet-system
+    type: system_ds
+    tm_mad: ssh
+    safe_dirs: '/var/tmp /tmp'
+
+hosts:
+  - reserved_cpu: 50
+    im_mad: kvm
+    vm_mad: kvm
+    provision:
+      hostname: packet-host1
+  - reserved_cpu: 50
+    im_mad: kvm
+    vm_mad: kvm
+    provision:
+      hostname: packet-host2
+EOF
+
+}
+
+packet_provision() {
+    echo "Running oneprovision"
+    if oneprovision create "$PACKET_TEMPLATE" -d; then
+        green "OK"
+    else
+        red "FAILED"
+        exit 1
+    fi
 }
 
 title "Configuration"
@@ -1168,21 +1258,26 @@ check "set_init_password" "Setting initial password for current user and oneadmi
     "Changing WebUI to listen on port ${SUNSTONE_PORT}"
 
 packet && {
-    aug_change "IM_MAD[NAME = '\"kvm\"']/ARGUMENTS" "-r 3 -t 15 -w 200 kvm"
-
-
+    check "packet_conf_oned" "Applying packet changes to oned.conf"
+    check "packet_conf_hooks" "Configuring packet hooks in oned.conf"
+    check "packet_template" "Prepare packet template"
+    check "oneprovision validate $PACKET_TEMPLATE" "Validate packet template [$PACKET_TEMPLATE]"
+    check "update_ssh_configs '*.*.*.*'" "Update ssh configs to accessing Packe hosts"
 }
 
-check "systemctl start $ONE_SERVICES" \
-    "Starting OpenNebula services"
-check "systemctl enable $ONE_SERVICES" \
-    "Enabling OpenNebula servcies"
+check "systemctl start $ONE_SERVICES" "Starting OpenNebula services"
+check "systemctl enable $ONE_SERVICES" "Enabling OpenNebula servcies"
 check "one_is_ready" "Checking OpenNebula is working"
-check "deny_ssh_from_vnet" "Disabling ssh from virtual network"
-check "add_keys_to_known_hosts" "Adding localhost ssh key to known_hosts"
-check "test_ssh_connection" "Testing ssh connection to localhost"
-check "add_ssh_keys_to_oneadmin" "Add ssh key to oneadmin user"
-check "update_ssh_configs" "Update ssh configs to allow VM addresses reusig"
+
+packet && packet_provision
+
+networking && {
+    check "deny_ssh_from_vnet" "Disabling ssh from virtual network"
+    check "add_keys_to_known_hosts" "Adding localhost ssh key to known_hosts"
+    check "test_ssh_connection" "Testing ssh connection to localhost"
+    check "add_ssh_keys_to_oneadmin" "Add ssh key to oneadmin user"
+    check "update_ssh_configs" "Update ssh configs to allow VM addresses reusig"
+}
 
 
 #-------------------------------------------------------------------------------
@@ -1310,7 +1405,7 @@ check "update_template" "Updating template"
 
 title 'Report'
 echo "OpenNebula ${VERSION} was installed"
-echo "Sunstone (the webui) is runninng on:"
+echo "Sunstone [the webui] is runninng on:"
 echo "  http://$(get_my_ip)${PORT_STR}/"
 echo "Use following to login:"
 echo "  user: oneadmin"
