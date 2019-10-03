@@ -1266,7 +1266,7 @@ packet && {
 }
 
 check "systemctl start $ONE_SERVICES" "Starting OpenNebula services"
-check "systemctl enable $ONE_SERVICES" "Enabling OpenNebula servcies"
+check "systemctl enable $ONE_SERVICES" "Enabling OpenNebula services"
 check "one_is_ready" "Checking OpenNebula is working"
 
 packet && packet_provision
