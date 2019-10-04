@@ -1190,7 +1190,7 @@ packet_template() {
     cat >> "$PACKET_TEMPLATE" << EOF || return 1
 ---
 name: PacketProvision
-extends: /usr/share/one/oneprovision/templates/static_vxlan.yaml
+
 defaults:
   provision:
     driver: packet
@@ -1203,6 +1203,7 @@ defaults:
     remote_user: root
   configuration:
     opennebula_node_kvm_use_ev: true
+    iptables_masquerade_enabled: false
 
 cluster:
   name: PacketCluster
@@ -1227,13 +1228,40 @@ hosts:
     vm_mad: kvm
     provision:
       hostname: packet-host2
+networks:
+  - name:        "packet-host-only"
+    vn_mad:      "dummy"
+    bridge:      "br0"
+    dns:         "8.8.8.8 8.8.4.4"
+    gateway:     "192.168.150.1"
+    description: "Host-only networking"
+    ar:
+      - ip:   "192.168.150.2"
+        size: "253"
+        type: "IP4"
+
+  - name: "packet-public"
+    vn_mad: alias_sdnat
+    external: yes
+    description: "Packet Public IP Networking"
+    ar:
+      - size: 2
+        type: IP4
+        ipam_mad: packet
+        packet_ip_type: public_ipv4
+        packet_token: $EDGE_PACKET_TOKEN
+        packet_project: $EDGE_PACKET_PROJECT
+        facility: $EDGE_PACKET_FACILITY
 EOF
 
 }
 
 packet_provision() {
     echo "Running oneprovision"
-    if oneprovision create "$PACKET_TEMPLATE" -d; then
+    sudo -u oneadmin touch /var/lib/one/.ssh/known_hosts
+    chown oneadmin:oneadmin "$PACKET_TEMPLATE"
+
+    if sudo -u oneadmin oneprovision create "$PACKET_TEMPLATE" --fail-cleanup -d; then
         green "OK"
     else
         red "FAILED"
@@ -1262,7 +1290,7 @@ packet && {
     check "packet_conf_hooks" "Configuring packet hooks in oned.conf"
     check "packet_template" "Prepare packet template"
     check "oneprovision validate $PACKET_TEMPLATE" "Validate packet template [$PACKET_TEMPLATE]"
-    check "update_ssh_configs '*.*.*.*'" "Update ssh configs to accessing Packe hosts"
+    check "update_ssh_configs '*'" "Update ssh configs to accessing Packet hosts"
 }
 
 check "systemctl start $ONE_SERVICES" "Starting OpenNebula services"
@@ -1387,15 +1415,17 @@ update_template() {
     return ${RC}
 }
 
-check "update_datastores" "Updating datastores, TM_MAD=qcow2, SHARED=yes"
-kvm && check "onehost create -i kvm -v kvm localhost >/dev/null 2>&1" \
-    "Creating KVM host"
-lxd && check "onehost create -i lxd -v lxd localhost >/dev/null 2>&1" \
-    "Creating LXD host"
-check "create_vnet" "Creating virtual network"
-check "export_marketapp" \
-    "Exporting [${MARKET_APP_NAME}] from Marketplace to local datastore"
-check "update_template" "Updating template"
+node && {
+    check "update_datastores" "Updating datastores, TM_MAD=qcow2, SHARED=yes"
+    kvm && check "onehost create -i kvm -v kvm localhost >/dev/null 2>&1" \
+        "Creating KVM host"
+    lxd && check "onehost create -i lxd -v lxd localhost >/dev/null 2>&1" \
+        "Creating LXD host"
+    check "create_vnet" "Creating virtual network"
+    check "export_marketapp" \
+        "Exporting [${MARKET_APP_NAME}] from Marketplace to local datastore"
+    check "update_template" "Updating template"
+}
 
 
 #-------------------------------------------------------------------------------
