@@ -39,7 +39,7 @@ NETWORKING='yes'
 DELETE_ONEADMIN='yes'
 EDGE="no"
 EDGE_HOST_NUM=1
-EDGE_MARKETAPP_NAME="Service WordPress -- KVM"
+EDGE_MARKET_APP_NAME="Service WordPress -- KVM"
 EDGE_PACKET_FACILITY="ams1"
 EDGE_PACKET_PLAN="t1.small"
 EDGE_PACKET_OS="ubuntu_18_04"
@@ -62,13 +62,15 @@ usage() {
     e ""
     e "--edge [packet]"                           "Edge provider"
     e "--edge-host-num [1]"                       "Number of edge nodes def"
-    e "--edge-marketapp-name [$EDGE_MARKETAPP_NAME]"
+    e "--edge-marketapp-name [$EDGE_MARKET_APP_NAME]"
 	e ""                                          "Market app name for Packet"
     e "--edge-packet-token [<token>]"             "Packet token"
     e "--edge-packet-project [<project>]"         "Packet project"
     e "--edge-packet-facility [$EDGE_PACKET_FACILITY]" "Packet facility"
     e "--edge-packet-plan [$EDGE_PACKET_PLAN]"    "Packet plan"
     e "--edge-packet-os [$EDGE_PACKET_OS]"        "Packet OS"
+    e "--edge-marketapp-name [$EDGE_MARKET_APP_NAME]"
+	e ""                                          "Market app name for Packet"
     e ""
     e "--password [random generated]"             "Initial password for oneadmin"
     e "--ssh-pubkey [~/.ssh/id_rsa.pub]"          "User ssh public key"
@@ -924,6 +926,7 @@ packet && {
     # TODO: Verify we have curl
     # TODO: Validate validate project, facility and OS
     # TODO: Validate validate availability of plan (HW type) in facility
+    # TODO: check also edge_market_app is present
 
     check "type -t pip >/dev/null" "Checking python-pip is installed" 1 \
         "SKIP will try to install" || MISSING_PKGS="${MISSING_PKGS} python-pip"
@@ -1223,11 +1226,6 @@ hosts:
     vm_mad: kvm
     provision:
       hostname: packet-host1
-  - reserved_cpu: 50
-    im_mad: kvm
-    vm_mad: kvm
-    provision:
-      hostname: packet-host2
 networks:
   - name:        "packet-host-only"
     vn_mad:      "dummy"
@@ -1376,14 +1374,15 @@ poll_for_marketplace() {
 }
 
 export_marketapp() {
+    local APP_NAME="$1"
     poll_for_marketplace
 
-    ID=$(onemarketapp list --filter NAME="${MARKET_APP_NAME}" \
+    ID=$(onemarketapp list --filter NAME="${APP_NAME}" \
         --csv | tail -1 | awk -F, '{print $1}') || return 1
 
     # onemarketapp always return 0 and prints to STDOUT
     OUT=$(mktemp)
-    onemarketapp export "${ID}" "${MARKET_APP_NAME}" --datastore 1 > "$OUT"
+    onemarketapp export "${ID}" "${APP_NAME}" --datastore 1 > "$OUT"
 
     IMG_LIST=$(oneimage list --csv)
     if [ "$IMG_LIST" = "" ]; then
@@ -1404,10 +1403,16 @@ update_template() {
         > "${TMP_FILE}"
 
     # Add network
-    echo 'NIC=[ NETWORK="vnet", NETWORK_UNAME="oneadmin", SECURITY_GROUPS="0" ]' >> "${TMP_FILE}"
+    node && echo 'NIC=[ NETWORK="vnet", NETWORK_UNAME="oneadmin", SECURITY_GROUPS="0" ]' >> "${TMP_FILE}"
 
     # Add LXD_SECURITY_PRIVILEGED="true"
     lxd && echo 'LXD_SECURITY_PRIVILEGED="true"' >> "${TMP_FILE}"
+
+    # Add Packet networking
+    packet && {
+		echo 'NIC = [ NETWORK = "packet-host-only", NETWORK_UNAME = "oneadmin", SECURITY_GROUPS = "0" ]' >> "${TMP_FILE}"
+		echo 'NIC_ALIAS = [ NETWORK = "packet-public", NETWORK_UNAME = "oneadmin", SECURITY_GROUPS = "0" ]' >> "${TMP_FILE}"
+    }
 
     onetemplate update 0 "${TMP_FILE}" >/dev/null
     RC=$?
@@ -1422,11 +1427,16 @@ node && {
     lxd && check "onehost create -i lxd -v lxd localhost >/dev/null 2>&1" \
         "Creating LXD host"
     check "create_vnet" "Creating virtual network"
-    check "export_marketapp" \
+    check "export_marketapp \"$MARKET_APP_NAME\"" \
         "Exporting [${MARKET_APP_NAME}] from Marketplace to local datastore"
-    check "update_template" "Updating template"
 }
 
+packet && {
+    check "export_marketapp \"$EDGE_MARKET_APP_NAME\"" \
+        "Exporting [${EDGE_MARKET_APP_NAME}] from Marketplace to local datastore"
+}
+
+check "update_template" "Updating VM template"
 
 #-------------------------------------------------------------------------------
 # Report
