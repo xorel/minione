@@ -38,10 +38,10 @@ NODE='yes'
 NETWORKING='yes'
 DELETE_ONEADMIN='yes'
 EDGE="no"
-EDGE_HOST_NUM=1
 EDGE_MARKET_APP_NAME="Service WordPress - KVM"
 EDGE_PACKET_FACILITY="ams1"
 EDGE_PACKET_PLAN="t1.small"
+EDGE_HOST_NUM="1"
 EDGE_PACKET_OS="ubuntu_18_04"
 
 
@@ -64,8 +64,9 @@ usage() {
     e "--edge-host-num [1]"                       "Number of edge nodes def"
     e "--edge-marketapp-name [$EDGE_MARKET_APP_NAME]"
 	e ""                                          "Market app name for Packet"
-    e "--edge-packet-token [<token>]"             "Packet token"
-    e "--edge-packet-project [<project>]"         "Packet project"
+    e "--edge-packet-token [<token>]"             "Packet token (required with '--edge packet')"
+    e "--edge-packet-project [<project>]"         "Packet project (required with '--edge packet')"
+    e "--edge-host-num [$EDGE_HOST_NUM]"          "Number of edge hosts"
     e "--edge-packet-facility [$EDGE_PACKET_FACILITY]" "Packet facility"
     e "--edge-packet-plan [$EDGE_PACKET_PLAN]"    "Packet plan"
     e "--edge-packet-os [$EDGE_PACKET_OS]"        "Packet OS"
@@ -1174,18 +1175,18 @@ packet_conf_hooks() {
 	aug_set "VM_HOOK[last()+1]/name" '"external_ip_running"'
 	aug_set "VM_HOOK[last()]/on" '"RUNNING"'
 	aug_set "VM_HOOK[last()]/command" '"alias_ip/alias_ip.rb"'
-	aug_set "VM_HOOK[last()]/arguments" '"$ID $TEMPLATE"'
+	aug_set "VM_HOOK[last()]/arguments" "\"\$ID \$TEMPLATE\""
 
 	aug_set "VM_HOOK[last()+1]/name" '"alias_ip_hotplug"'
 	aug_set "VM_HOOK[last()]/on" '"CUSTOM"'
 	aug_set "VM_HOOK[last()]/state" '"ACTIVE"'
 	aug_set "VM_HOOK[last()]/lcm_state" '"HOTPLUG_NIC"'
 	aug_set "VM_HOOK[last()]/command" '"alias_ip/alias_ip.rb"'
-	aug_set "VM_HOOK[last()]/arguments" '"$ID $TEMPLATE"'
+	aug_set "VM_HOOK[last()]/arguments" "\"\$ID \$TEMPLATE\""
 	aug_set "VM_HOOK[last()+1]/name" '"alias_ip_done"'
 	aug_set "VM_HOOK[last()]/on" '"DONE"'
 	aug_set "VM_HOOK[last()]/command" '"alias_ip/alias_ip.rb"'
-	aug_set "VM_HOOK[last()]/arguments" '"$ID $TEMPLATE"'
+	aug_set "VM_HOOK[last()]/arguments" "\"\$ID \$TEMPLATE\""
 }
 
 packet_template() {
@@ -1221,11 +1222,21 @@ datastores:
     safe_dirs: '/var/tmp /tmp'
 
 hosts:
+EOF
+
+    # HOSTS
+    for I in $(seq 1 "${EDGE_HOST_NUM}"); do
+        cat >> "$PACKET_TEMPLATE" << EOF || return 1
   - reserved_cpu: 50
     im_mad: kvm
     vm_mad: kvm
     provision:
-      hostname: packet-host1
+      hostname: packet-host$I
+EOF
+    done
+
+
+    cat >> "$PACKET_TEMPLATE" << EOF || return 1
 networks:
   - name:        "packet-host-only"
     vn_mad:      "dummy"
@@ -1384,7 +1395,7 @@ export_marketapp() {
 
     # onemarketapp always return 0 and prints to STDOUT
     OUT=$(mktemp)
-    onemarketapp export "${ID}" "${APP_NAME}" --datastore $DS_ID > "$OUT"
+    onemarketapp export "${ID}" "${APP_NAME}" --datastore "$DS_ID" > "$OUT"
 
     IMG_LIST=$(oneimage list --csv)
     if [ "$IMG_LIST" = "" ]; then
