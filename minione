@@ -39,7 +39,7 @@ NETWORKING='yes'
 DELETE_ONEADMIN='yes'
 EDGE="no"
 EDGE_HOST_NUM=1
-EDGE_MARKET_APP_NAME="Service WordPress -- KVM"
+EDGE_MARKET_APP_NAME="Service WordPress - KVM"
 EDGE_PACKET_FACILITY="ams1"
 EDGE_PACKET_PLAN="t1.small"
 EDGE_PACKET_OS="ubuntu_18_04"
@@ -1375,6 +1375,8 @@ poll_for_marketplace() {
 
 export_marketapp() {
     local APP_NAME="$1"
+    local DS_ID="${2:-1}"
+
     poll_for_marketplace
 
     ID=$(onemarketapp list --filter NAME="${APP_NAME}" \
@@ -1382,7 +1384,7 @@ export_marketapp() {
 
     # onemarketapp always return 0 and prints to STDOUT
     OUT=$(mktemp)
-    onemarketapp export "${ID}" "${APP_NAME}" --datastore 1 > "$OUT"
+    onemarketapp export "${ID}" "${APP_NAME}" --datastore $DS_ID > "$OUT"
 
     IMG_LIST=$(oneimage list --csv)
     if [ "$IMG_LIST" = "" ]; then
@@ -1411,7 +1413,7 @@ update_template() {
     # Add Packet networking
     packet && {
 		echo 'NIC = [ NETWORK = "packet-host-only", NETWORK_UNAME = "oneadmin", SECURITY_GROUPS = "0" ]' >> "${TMP_FILE}"
-		echo 'NIC_ALIAS = [ NETWORK = "packet-public", NETWORK_UNAME = "oneadmin", SECURITY_GROUPS = "0" ]' >> "${TMP_FILE}"
+		echo 'NIC_ALIAS = [ NETWORK = "packet-public", PARENT = "NIC0", NETWORK_UNAME = "oneadmin", SECURITY_GROUPS = "0" ]' >> "${TMP_FILE}"
     }
 
     onetemplate update 0 "${TMP_FILE}" >/dev/null
@@ -1432,7 +1434,7 @@ node && {
 }
 
 packet && {
-    check "export_marketapp \"$EDGE_MARKET_APP_NAME\"" \
+    check "export_marketapp \"$EDGE_MARKET_APP_NAME\" 100" \
         "Exporting [${EDGE_MARKET_APP_NAME}] from Marketplace to local datastore"
 }
 
