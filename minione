@@ -944,39 +944,45 @@ packet && {
      # TODO: Check for version as well
 }
 
+
 #-------------------------------------------------------------------------------
 # Pre-installation report
 #-------------------------------------------------------------------------------
 
 title "Main deployment steps:"
-[[ "${CLEAN}" = yes ]]            && echo "Clean oneadmin home"
-[[ "${DISABLE_SELINUX}" = yes ]]  && echo "Disable SELinux"
-[[ -n "${MISSING_PKGS}" ]]        && echo "Install ${MISSING_PKGS}"
+echo "Install OpenNebula frontend version ${VERSION}"
+
+lxd && echo "Install OpenNebula LXD node"
+kvm && echo "Install OpenNebula KVM node"
+packet && echo "Provision OpenNebula Packet node"
+
 node && {
     centos && firewalld_running     && echo "Disable_firewalld"
     echo "Configure bridge ${BRIDGE_INTERFACE} with IP ${VNET_GATEWAY}/${NETMASK_BITS}"
     echo "Enable NAT over ${NAT_INTERFACE}"
     [[ "${ENABLED_APPARMOR}" = yes ]] && echo "Modify AppArmor"
-    echo "Install OpenNebula node version ${VERSION}"
+    echo "Export appliance and update VM template"
 }
-
-echo "Using ssh public key ${SSH_PUBKEY}"
-echo "Install OpenNebula frontend version ${VERSION}"
 
 packet && {
     echo "Install ONEProvision"
-    echo "Configure IPAM Packet"
-    echo "Conrigure alias IP mapping driver"
-    echo "Configure VM hooks"
-    echo "Triger oneprovision for edge host, 2 datastores, private vnet"
-    echo "Prepare appliance and VM template"
+    echo "Configure IPAM Packet, alias IP mapping driver, VM hooks"
+    echo "Triger oneprovision for ${EDGE_HOST_NUM} host, 2 datastores, private vnet"
+    echo "Export appliance and update VM template"
 }
 
+[[ "${CLEAN}" = yes ]]            && echo "Clean oneadmin home"
+[[ "${DISABLE_SELINUX}" = yes ]]  && echo "Disable SELinux"
+[[ -n "${MISSING_PKGS}" ]]        && echo "Install ${MISSING_PKGS}"
 
 echo ""
 echo "Do you agree? [yes/no]:"
 [[ "${ASK}" = 'yes' ]] && yes_no
 
+
+#-------------------------------------------------------------------------------
+# Installation
+#-------------------------------------------------------------------------------
 
 title "Installation"
 VERBOSE='yes'
@@ -1305,6 +1311,8 @@ packet && {
 check "systemctl start $ONE_SERVICES" "Starting OpenNebula services"
 check "systemctl enable $ONE_SERVICES" "Enabling OpenNebula services"
 check "one_is_ready" "Checking OpenNebula is working"
+check "add_ssh_keys_to_oneadmin" "Add ssh key to oneadmin user"
+check "update_ssh_configs" "Update ssh configs to allow VM addresses reusig"
 
 packet && packet_provision
 
@@ -1312,8 +1320,6 @@ networking && {
     check "deny_ssh_from_vnet" "Disabling ssh from virtual network"
     check "add_keys_to_known_hosts" "Adding localhost ssh key to known_hosts"
     check "test_ssh_connection" "Testing ssh connection to localhost"
-    check "add_ssh_keys_to_oneadmin" "Add ssh key to oneadmin user"
-    check "update_ssh_configs" "Update ssh configs to allow VM addresses reusig"
 }
 
 
